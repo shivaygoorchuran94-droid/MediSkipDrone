@@ -11,7 +11,7 @@ window.EcoDash = window.EcoDash || {};
   'use strict';
 
   EcoDash.Config = {
-    version: '1.0.0',
+    version: '1.2.0',
 
     storageKey: 'ecodash.scores.v1',
     prefKey:    'ecodash.prefs.v1',
@@ -77,9 +77,21 @@ window.EcoDash = window.EcoDash || {};
       solarCooldown: 24
     },
 
+    /* ------------------------------------------------------------------
+       audio — the *mix* levels live here (fixed, tuned by the designer).
+       The user-facing volume sliders (Master / Music / SFX) act as
+       multipliers on top of these, so "100 %" always means the designed
+       mix rather than an arbitrary boost.
+
+       musicVolume was raised from 0.14 → 0.45 so the procedural score
+       sits at a clearly audible background level (roughly -20 dB) under
+       normal gameplay. Combined with the doubled note gains in the
+       sequencer, the effective music level is ~6–7× the previous one.
+       ------------------------------------------------------------------ */
     audio: {
-      musicVolume: 0.14,
-      sfxVolume: 0.50
+      masterVolume: 1.00,
+      musicVolume:  0.45,
+      sfxVolume:    0.50
     }
   };
 })(window.EcoDash);

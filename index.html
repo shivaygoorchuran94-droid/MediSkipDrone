@@ -2,8 +2,12 @@
 <html lang="en-ZA">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#06111f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description"
         content="EcoDash — African Digital Logistics & Infrastructure Simulator. A solar-powered delivery drone simulation built with HTML5 Canvas, CSS3 and vanilla JavaScript (ES6+)." />
   <title>EcoDash | African Digital Logistics Simulator</title>
@@ -13,6 +17,10 @@
 
   <div id="app">
     <canvas id="game-canvas" aria-label="EcoDash simulation viewport" role="img"></canvas>
+
+    <!-- Invisible probe: lets JS read the CSS safe-area insets so the
+         canvas HUD can avoid notches and home indicators. -->
+    <div id="safe-probe" aria-hidden="true"></div>
 
     <div id="overlay">
       <!-- START -->
@@ -24,14 +32,25 @@
           Deliver medical supplies to rural clinics, dodge transmission pylons,
           storms and wildlife — and keep your battery alive through load-shedding.
         </p>
+
+        <p id="rotate-hint" class="rotate-hint">↻ Rotate to landscape for the best experience</p>
+
         <div class="controls-grid">
-          <div class="ctrl"><kbd>W</kbd> / <kbd>↑</kbd> / <kbd>Space</kbd><span>Thrust up</span></div>
-          <div class="ctrl"><kbd>S</kbd> / <kbd>↓</kbd><span>Descend</span></div>
-          <div class="ctrl"><kbd>P</kbd> / <kbd>Esc</kbd><span>Pause</span></div>
-          <div class="ctrl"><kbd>M</kbd><span>Mute audio</span></div>
+          <div class="ctrl no-touch"><kbd>W</kbd> / <kbd>↑</kbd> / <kbd>Space</kbd><span>Thrust up</span></div>
+          <div class="ctrl no-touch"><kbd>S</kbd> / <kbd>↓</kbd><span>Descend</span></div>
+          <div class="ctrl no-touch"><kbd>P</kbd> / <kbd>Esc</kbd><span>Pause</span></div>
+          <div class="ctrl no-touch"><kbd>M</kbd><span>Mute audio</span></div>
+
+          <div class="ctrl touch-only"><span class="tap-icon">▲</span><span>Hold to thrust</span></div>
+          <div class="ctrl touch-only"><span class="tap-icon">▼</span><span>Hold to descend</span></div>
+          <div class="ctrl touch-only"><span class="tap-icon">⏸</span><span>Pause button</span></div>
+          <div class="ctrl touch-only"><span class="tap-icon">⚙</span><span>Audio settings</span></div>
         </div>
+
         <button id="btn-start" class="btn btn-primary" type="button">▶ Start Mission</button>
-        <p class="hint">Press <kbd>Space</kbd> or <kbd>Enter</kbd> to begin</p>
+        <p class="hint">
+          <span class="no-touch">Press <kbd>Space</kbd> or <kbd>Enter</kbd> to begin &nbsp;·&nbsp; </span><kbd>⚙</kbd> audio settings
+        </p>
       </section>
 
       <!-- PAUSE -->
@@ -42,7 +61,7 @@
           <button id="btn-resume" class="btn btn-primary" type="button">▶ Resume</button>
           <button id="btn-restart-pause" class="btn" type="button">↻ Restart</button>
         </div>
-        <p class="hint">Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</p>
+        <p class="hint"><span class="no-touch">Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</span></p>
       </section>
 
       <!-- GAME OVER -->
@@ -51,11 +70,70 @@
         <p id="over-reason" class="blurb"></p>
         <div id="over-stats" class="stats-grid"></div>
         <button id="btn-restart" class="btn btn-primary" type="button">↻ Fly Again</button>
-        <p class="hint">Press <kbd>R</kbd> or <kbd>Space</kbd> to restart</p>
+        <p class="hint"><span class="no-touch">Press <kbd>R</kbd> or <kbd>Space</kbd> to restart</span></p>
       </section>
     </div>
 
-    <button id="btn-mute" class="icon-btn" type="button" aria-label="Toggle sound" title="Toggle sound (M)">
+    <!-- ON-SCREEN TOUCH CONTROLS (only shown on touch devices while playing) -->
+    <div id="touch-controls" aria-hidden="true">
+      <button id="btn-dive" class="touch-btn touch-btn-dive" type="button" aria-label="Descend">
+        <span aria-hidden="true">▼</span>
+      </button>
+      <button id="btn-thrust" class="touch-btn touch-btn-thrust" type="button" aria-label="Thrust up">
+        <span aria-hidden="true">▲</span>
+      </button>
+    </div>
+
+    <!-- AUDIO MIXER (modal, independent of game state) -->
+    <section id="settings-panel" class="panel hidden"
+             role="dialog" aria-label="Audio settings">
+      <h2 class="panel-title">Audio Settings</h2>
+      <p class="blurb">Balance the mix. Levels save automatically.</p>
+
+      <div class="mixer">
+        <div class="vol-row">
+          <label for="vol-master">Master</label>
+          <input id="vol-master" class="vol-slider" type="range"
+                 min="0" max="100" step="1" value="100"
+                 aria-label="Master volume" />
+          <output id="vol-master-out" class="vol-value" for="vol-master">100%</output>
+        </div>
+
+        <div class="vol-row">
+          <label for="vol-music">Music</label>
+          <input id="vol-music" class="vol-slider" type="range"
+                 min="0" max="100" step="1" value="100"
+                 aria-label="Music volume" />
+          <output id="vol-music-out" class="vol-value" for="vol-music">100%</output>
+        </div>
+
+        <div class="vol-row">
+          <label for="vol-sfx">Effects</label>
+          <input id="vol-sfx" class="vol-slider" type="range"
+                 min="0" max="100" step="1" value="100"
+                 aria-label="Sound effects volume" />
+          <output id="vol-sfx-out" class="vol-value" for="vol-sfx">100%</output>
+        </div>
+      </div>
+
+      <p id="mixer-note" class="mixer-note">Levels are saved automatically.</p>
+
+      <button id="btn-close-settings" class="btn btn-primary" type="button">Done</button>
+    </section>
+
+    <button id="btn-pause" class="icon-btn hidden" type="button"
+            aria-label="Pause mission" title="Pause (P)">
+      <span aria-hidden="true">⏸</span>
+    </button>
+
+    <button id="btn-settings" class="icon-btn" type="button"
+            aria-label="Audio settings" aria-expanded="false"
+            title="Audio settings">
+      <span aria-hidden="true">⚙</span>
+    </button>
+
+    <button id="btn-mute" class="icon-btn" type="button"
+            aria-label="Toggle sound" title="Toggle sound (M)">
       <span id="mute-icon">🔊</span>
     </button>
   </div>

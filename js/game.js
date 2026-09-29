@@ -1,5 +1,5 @@
 /* ==========================================================================
-   game.js — Application layer (DEBUGGED)
+   game.js — Application layer
    Contains:  EcoDash.HUD, EcoDash.Game, application bootstrap
    ========================================================================== */
 window.EcoDash = window.EcoDash || {};
@@ -314,6 +314,10 @@ window.EcoDash = window.EcoDash || {};
     this.onStateChange = null;
     this.onMuteChange = null;
 
+    /* When true the keyboard/gamepad layer ignores gameplay keys — used
+       while a modal DOM panel (e.g. Audio Settings) has focus. */
+    this.uiBlocked = false;
+
     this.input   = EcoDash.Input;
     this.audio   = EcoDash.Audio;
     this.storage = EcoDash.Storage;
@@ -404,8 +408,10 @@ window.EcoDash = window.EcoDash || {};
     this.resetRun();
     this.setState('playing');
 
-    this.audio.unlock();
+    this.audio.unlock();          /* also (idempotently) starts music */
     this.audio.play('click');
+    /* Music is now constant — the scheduler keeps running across every
+       state change, so startMusic() here is a harmless no-op. */
     this.audio.startMusic();
   };
 
@@ -414,14 +420,16 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.pause = function () {
     if (this.state !== 'playing') return;
     this.setState('paused');
-    this.audio.stopMusic();
+    /* NOTE: music is intentionally NOT stopped here — it plays
+       continuously through pause, game-over, restart, and every other
+       state for the whole session. */
   };
 
   Game.prototype.resume = function () {
     if (this.state !== 'paused') return;
     this.setState('playing');
     this.audio.unlock();
-    this.audio.startMusic();
+    /* No explicit startMusic() needed — the loop is already running. */
   };
 
   Game.prototype.togglePause = function () {
@@ -435,7 +443,7 @@ window.EcoDash = window.EcoDash || {};
   };
 
   Game.prototype.toggleMute = function () {
-    // Audio.toggleMute() already persists the pref.
+    /* Audio.toggleMute() already persists the pref. */
     return this.audio.toggleMute();
   };
 
@@ -450,7 +458,7 @@ window.EcoDash = window.EcoDash || {};
 
     /* ------------------------------------------------------------------
        Compute the score entry and persist it BEFORE firing setState(),
-       otherwise the HUD reads stale lastEntry / bestScore (bug #2).
+       otherwise the HUD reads stale lastEntry / bestScore.
        ------------------------------------------------------------------ */
     var entry = {
       score: Math.floor(this.score),
@@ -466,9 +474,9 @@ window.EcoDash = window.EcoDash || {};
     this.scores = this.storage.saveScore(entry);
     this.bestScore = this.scores.length ? this.scores[0].score : entry.score;
 
-    /* Now flip state so the overlay reads the fresh values. */
+    /* Now flip state so the overlay reads the fresh values.
+       Music is intentionally left running underneath the game-over panel. */
     this.setState('over');
-    this.audio.stopMusic();
     this.audio.play('crash');
 
     this.shake = 1;
@@ -547,6 +555,7 @@ window.EcoDash = window.EcoDash || {};
   };
 
   Game.prototype.handleGlobalKeys = function () {
+    if (this.uiBlocked) return;
     if (this.input.pressed('KeyM')) {
       this.toggleMute();
       if (this.onMuteChange) this.onMuteChange(this.audio.isMuted());
@@ -554,6 +563,8 @@ window.EcoDash = window.EcoDash || {};
   };
 
   Game.prototype.handleStateKeys = function () {
+    if (this.uiBlocked) return;
+
     var I = this.input;
 
     switch (this.state) {
@@ -659,7 +670,7 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.handleInteractions = function () {
     var d = this.drone;
 
-    /* Save previous frame's solar state, then reset — bug #1 & #3 fix. */
+    /* Save previous frame's solar state, then reset. */
     d.wasInSolar = d.inSolar;
     d.inSolar = false;
 
@@ -938,7 +949,8 @@ window.EcoDash = window.EcoDash || {};
 })(window.EcoDash);
 
 /* ==========================================================================
-   BOOTSTRAP — wires the canvas, DOM overlay menus and the Game instance.
+   BOOTSTRAP — wires the canvas, DOM overlay menus, the audio mixer panel
+   and the Game instance.
    ========================================================================== */
 (function () {
   'use strict';
@@ -967,10 +979,15 @@ window.EcoDash = window.EcoDash || {};
       over:   document.getElementById('screen-over')
     };
 
-    var overReason = document.getElementById('over-reason');
-    var overStats  = document.getElementById('over-stats');
-    var muteIcon   = document.getElementById('mute-icon');
-    var btnMute    = document.getElementById('btn-mute');
+    var overReason   = document.getElementById('over-reason');
+    var overStats    = document.getElementById('over-stats');
+    var muteIcon     = document.getElementById('mute-icon');
+    var btnMute      = document.getElementById('btn-mute');
+
+    var settingsPanel   = document.getElementById('settings-panel');
+    var btnSettings     = document.getElementById('btn-settings');
+    var btnCloseSettings = document.getElementById('btn-close-settings');
+    var mixerNote       = document.getElementById('mixer-note');
 
     /* -------------------------------------------------- state -> overlay */
     game.onStateChange = function (state) {
@@ -987,11 +1004,156 @@ window.EcoDash = window.EcoDash || {};
       }
     };
 
+    /* ==================================================================
+       AUDIO MIXER PANEL
+       ================================================================== */
+
+    var mixer = {
+      master: {
+        el:  document.getElementById('vol-master'),
+        out: document.getElementById('vol-master-out'),
+        get: E.Audio.getMasterVolume,
+        set: E.Audio.setMasterVolume
+      },
+      music: {
+        el:  document.getElementById('vol-music'),
+        out: document.getElementById('vol-music-out'),
+        get: E.Audio.getMusicVolume,
+        set: E.Audio.setMusicVolume
+      },
+      sfx: {
+        el:  document.getElementById('vol-sfx'),
+        out: document.getElementById('vol-sfx-out'),
+        get: E.Audio.getSfxVolume,
+        set: E.Audio.setSfxVolume
+      }
+    };
+
+    /* Repaint the coloured "fill" portion of a range input. */
+    function paintSlider(el) {
+      if (!el) return;
+      var min = parseFloat(el.min);
+      var max = parseFloat(el.max);
+      var val = parseFloat(el.value);
+      if (!isFinite(min)) min = 0;
+      if (!isFinite(max) || max === min) max = 100;
+      if (!isFinite(val)) val = min;
+      var pct = ((val - min) / (max - min)) * 100;
+      el.style.setProperty('--fill', pct.toFixed(2) + '%');
+    }
+
+    function syncMixerUI() {
+      for (var key in mixer) {
+        var m = mixer[key];
+        if (!m.el) continue;
+        var pct = Math.round(E.Utils.clamp01(m.get()) * 100);
+        m.el.value = String(pct);
+        if (m.out) m.out.textContent = pct + '%';
+        paintSlider(m.el);
+      }
+      if (mixerNote) {
+        var muted = E.Audio.isMuted();
+        mixerNote.textContent = muted
+          ? 'Output muted — press M or the speaker button to unmute.'
+          : 'Levels are saved automatically.';
+        mixerNote.classList.toggle('muted', muted);
+      }
+    }
+
+    function bindSlider(key) {
+      var m = mixer[key];
+      if (!m.el) return;
+
+      m.el.addEventListener('input', function () {
+        var v = (parseFloat(m.el.value) || 0) / 100;
+        /* Live preview without hammering localStorage on every pixel. */
+        m.set(v, false);
+        if (m.out) m.out.textContent = Math.round(v * 100) + '%';
+        paintSlider(m.el);
+      });
+
+      m.el.addEventListener('change', function () {
+        var v = (parseFloat(m.el.value) || 0) / 100;
+        m.set(v, true);            /* persist the final value */
+        E.Audio.unlock();
+        if (key === 'sfx') E.Audio.play('blip');
+        m.el.blur();               /* hand the keyboard back to the game */
+      });
+    }
+
+    bindSlider('master');
+    bindSlider('music');
+    bindSlider('sfx');
+
+    /* ------------------------------------------------- open / close --- */
+    var autoPaused = false;
+
+    function settingsOpen() {
+      return !!settingsPanel && !settingsPanel.classList.contains('hidden');
+    }
+
+    function openSettings() {
+      if (!settingsPanel) return;
+      syncMixerUI();
+      settingsPanel.classList.remove('hidden');
+      game.uiBlocked = true;
+      autoPaused = false;
+      if (game.state === 'playing') {
+        game.pause();
+        autoPaused = true;
+      }
+      if (btnSettings) btnSettings.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeSettings() {
+      if (!settingsPanel) return;
+      settingsPanel.classList.add('hidden');
+      game.uiBlocked = false;
+      if (btnSettings) {
+        btnSettings.setAttribute('aria-expanded', 'false');
+        btnSettings.blur();
+      }
+      if (autoPaused && game.state === 'paused') {
+        autoPaused = false;
+        game.resume();
+      }
+      autoPaused = false;
+    }
+
+    if (btnSettings) {
+      btnSettings.setAttribute('aria-expanded', 'false');
+      btnSettings.addEventListener('click', function (evt) {
+        evt.currentTarget.blur();
+        E.Audio.unlock();
+        if (settingsOpen()) closeSettings();
+        else                openSettings();
+      });
+    }
+
+    if (btnCloseSettings) {
+      btnCloseSettings.addEventListener('click', function (evt) {
+        evt.currentTarget.blur();
+        E.Audio.unlock();
+        closeSettings();
+      });
+    }
+
+    /* Escape closes the mixer and must NOT leak through to the game. */
+    document.addEventListener('keydown', function (e) {
+      if (!settingsOpen()) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSettings();
+      }
+    }, true);
+
     /* -------------------------------------------------------- mute icon */
     function syncMuteIcon() {
       var muted = E.Audio.isMuted();
       if (muteIcon) muteIcon.textContent = muted ? '🔇' : '🔊';
       if (btnMute)  btnMute.setAttribute('aria-pressed', String(muted));
+      if (settingsOpen()) syncMixerUI();
     }
 
     game.onMuteChange = syncMuteIcon;
@@ -1029,13 +1191,14 @@ window.EcoDash = window.EcoDash || {};
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
 
-    /* Auto-pause on tab blur. */
+    /* Auto-pause on tab blur. Music keeps playing throughout. */
     document.addEventListener('visibilitychange', function () {
       if (document.hidden && game.state === 'playing') game.pause();
     });
 
     /* ------------------------------------------------------------- go! */
     syncMuteIcon();
+    syncMixerUI();
     game.onStateChange('menu');
     game.start();
   }

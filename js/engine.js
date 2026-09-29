@@ -6,14 +6,39 @@ window.EcoDash = window.EcoDash || {};
 
 /* ==========================================================================
    Audio — procedural Web Audio synthesis (no external files)
+
+   Signal graph:
+
+       oscillator / noise ──► [musicBus] ─┐
+                                          ├──► [master] ──► destination
+       oscillator / noise ──► [sfxBus]  ──┘
+
+   Three user-facing volumes (all 0..1, persisted to localStorage):
+       master ── scales the final output (mute also drives this node)
+       music  ── multiplies Config.audio.musicVolume
+       sfx    ── multiplies Config.audio.sfxVolume
+
+   Music policy — CONSTANT PLAYBACK
+   ---------------------------------
+   The procedural score runs continuously from the moment the audio
+   context is unlocked (first user gesture: key press, tap, click) until
+   the page is closed.  It is NOT stopped on pause, on game-over, on
+   resume, or on state changes.  `stopMusic()` remains part of the API
+   for completeness, but nothing in the application calls it any more.
    ========================================================================== */
 (function (EcoDash) {
   'use strict';
+
+  var C = EcoDash.Config;
 
   var ctx = null;
   var master = null, musicBus = null, sfxBus = null;
 
   var muted = false;
+  var masterVolume = 1;
+  var musicVolume  = 1;
+  var sfxVolume    = 1;
+
   var musicPlaying = false;
   var musicTimer = null;
   var nextNoteTime = 0;
@@ -23,7 +48,61 @@ window.EcoDash = window.EcoDash || {};
   var BASS   = [0, 0, -5, -5, -7, -7, -5, -5];
   var ROOT_HZ = 196.00;
 
-  function freqOf(semitones) { return ROOT_HZ * Math.pow(2, semitones / 12); }
+  /* ------------------------------------------------------------ helpers */
+
+  function clamp01(v) {
+    v = Number(v);
+    if (!isFinite(v)) return 0;
+    return v < 0 ? 0 : (v > 1 ? 1 : v);
+  }
+
+  function readPref(key, fallback) {
+    try {
+      if (EcoDash.Storage && typeof EcoDash.Storage.getPref === 'function') {
+        var v = EcoDash.Storage.getPref(key, fallback);
+        if (typeof v === 'number' && isFinite(v)) return v;
+        if (typeof v === 'boolean') return v;
+      }
+    } catch (e) {}
+    return fallback;
+  }
+
+  function writePref(key, value) {
+    try {
+      if (EcoDash.Storage && typeof EcoDash.Storage.setPref === 'function') {
+        EcoDash.Storage.setPref(key, value);
+      }
+    } catch (e) {}
+  }
+
+  /* Restore persisted mixer state synchronously, so the settings UI can
+     read real values before the AudioContext exists (browsers require a
+     user gesture before audio may start). */
+  muted        = !!readPref('muted', false);
+  masterVolume = clamp01(readPref('masterVolume', C.audio.masterVolume));
+  musicVolume  = clamp01(readPref('musicVolume', 1));
+  sfxVolume    = clamp01(readPref('sfxVolume', 1));
+
+  function musicBusGain() { return musicVolume * C.audio.musicVolume; }
+  function sfxBusGain()   { return sfxVolume * C.audio.sfxVolume; }
+
+  /* Push the current mixer values into the live Web Audio graph. */
+  function applyVolumes(smooth) {
+    if (!ctx || !master || !musicBus || !sfxBus) return;
+
+    var t = ctx.currentTime;
+    var masterTarget = muted ? 0 : masterVolume;
+
+    if (smooth) {
+      master.gain.setTargetAtTime(masterTarget, t, 0.03);
+      musicBus.gain.setTargetAtTime(musicBusGain(), t, 0.03);
+      sfxBus.gain.setTargetAtTime(sfxBusGain(), t, 0.03);
+    } else {
+      master.gain.setValueAtTime(masterTarget, t);
+      musicBus.gain.setValueAtTime(musicBusGain(), t);
+      sfxBus.gain.setValueAtTime(sfxBusGain(), t);
+    }
+  }
 
   function ensureContext() {
     if (ctx) return true;
@@ -31,20 +110,35 @@ window.EcoDash = window.EcoDash || {};
     if (!AC) return false;
 
     ctx = new AC();
+
     master = ctx.createGain();
-    master.gain.value = muted ? 0 : 1;
+    master.gain.value = muted ? 0 : masterVolume;
     master.connect(ctx.destination);
 
     musicBus = ctx.createGain();
-    musicBus.gain.value = EcoDash.Config.audio.musicVolume;
+    musicBus.gain.value = musicBusGain();
     musicBus.connect(master);
 
     sfxBus = ctx.createGain();
-    sfxBus.gain.value = EcoDash.Config.audio.sfxVolume;
+    sfxBus.gain.value = sfxBusGain();
     sfxBus.connect(master);
 
     return true;
   }
+
+  /* Internal: bring up the sequencer exactly once. Idempotent. */
+  function beginMusicIfNeeded() {
+    if (!ctx || musicPlaying) return;
+    musicPlaying = true;
+    nextNoteTime = ctx.currentTime + 0.1;
+    step = 0;
+    clearInterval(musicTimer);
+    musicTimer = setInterval(scheduler, 60);
+  }
+
+  function freqOf(semitones) { return ROOT_HZ * Math.pow(2, semitones / 12); }
+
+  /* --------------------------------------------------------- synth prims */
 
   function tone(opts) {
     if (!ctx) return;
@@ -100,6 +194,8 @@ window.EcoDash = window.EcoDash || {};
     src.start();
   }
 
+  /* --------------------------------------------------------------- SFX -- */
+
   var SFX = {
     horn: function () {
       tone({ freq: 392.00, dur: 0.30, type: 'sawtooth', gain: 0.20, attack: 0.02 });
@@ -131,8 +227,13 @@ window.EcoDash = window.EcoDash || {};
     },
     click: function () {
       tone({ freq: 720, dur: 0.06, type: 'square', gain: 0.12 });
+    },
+    blip: function () {
+      tone({ freq: 1046.5, dur: 0.07, type: 'triangle', gain: 0.16 });
     }
   };
+
+  /* ------------------------------------------------------------ sequencer */
 
   function scheduleNote(semitone, time, dur, gain, type) {
     var osc = ctx.createOscillator();
@@ -150,16 +251,29 @@ window.EcoDash = window.EcoDash || {};
 
   function scheduler() {
     if (!ctx || !musicPlaying) return;
-    while (nextNoteTime < ctx.currentTime + 0.25) {
+
+    /* If the AudioContext was suspended (tab hidden) and later resumed,
+       currentTime may have jumped forward. Snap the scheduling cursor
+       forward to avoid firing a burst of long-past notes. */
+    if (nextNoteTime < ctx.currentTime - 0.5) {
+      nextNoteTime = ctx.currentTime + 0.1;
+    }
+
+    /* Hard cap per tick — safety net against pathological drift. */
+    var guard = 64;
+
+    while (nextNoteTime < ctx.currentTime + 0.25 && guard-- > 0) {
       var melody = MELODY[step % MELODY.length];
       var bass = BASS[Math.floor(step / 2) % BASS.length];
 
-      scheduleNote(melody + 12, nextNoteTime, 0.42, 0.075, 'triangle');
+      /* Note gains raised ~2× versus the original (0.075 / 0.030 / 0.085)
+         so the score is clearly audible under gameplay. */
+      scheduleNote(melody + 12, nextNoteTime, 0.42, 0.16, 'triangle');
       if (step % 4 === 0) {
-        scheduleNote(melody + 24, nextNoteTime + 0.02, 0.30, 0.030, 'sine');
+        scheduleNote(melody + 24, nextNoteTime + 0.02, 0.30, 0.055, 'sine');
       }
       if (step % 2 === 0) {
-        scheduleNote(bass, nextNoteTime, 0.55, 0.085, 'sine');
+        scheduleNote(bass, nextNoteTime, 0.55, 0.18, 'sine');
       }
 
       nextNoteTime += 0.26;
@@ -167,10 +281,19 @@ window.EcoDash = window.EcoDash || {};
     }
   }
 
+  /* ================================================================ API == */
+
   EcoDash.Audio = {
+
+    /* ------------------------------------------------------ lifecycle -- */
+
+    /* Called on every user gesture. Ensures the context exists, resumes
+       it if needed, and — critically for constant playback — starts the
+       sequencer the very first time so music runs for the whole session. */
     unlock: function () {
       if (!ensureContext()) return;
       if (ctx.state === 'suspended') ctx.resume();
+      beginMusicIfNeeded();
     },
 
     play: function (name) {
@@ -181,28 +304,33 @@ window.EcoDash = window.EcoDash || {};
       if (fn) fn();
     },
 
+    /* Idempotent — begins the loop if it isn't already running. Kept in
+       the public API so callers may use it directly, but unlock() already
+       does this automatically. */
     startMusic: function () {
       if (!ensureContext()) return;
-      if (musicPlaying) return;
-      musicPlaying = true;
-      nextNoteTime = ctx.currentTime + 0.1;
-      step = 0;
-      clearInterval(musicTimer);
-      musicTimer = setInterval(scheduler, 60);
+      if (ctx.state === 'suspended') ctx.resume();
+      beginMusicIfNeeded();
     },
 
+    /* Present for API completeness. The application no longer calls this,
+       because music is intended to run continuously throughout the
+       session — including pause and game-over screens. */
     stopMusic: function () {
       musicPlaying = false;
       clearInterval(musicTimer);
       musicTimer = null;
     },
 
+    isPlaying: function () { return musicPlaying; },
+
+    /* ----------------------------------------------------------- mute -- */
+
     setMuted: function (value) {
       muted = !!value;
-      if (master && ctx) {
-        master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.05);
-      }
-      EcoDash.Storage.setPref('muted', muted);
+      applyVolumes(true);
+      writePref('muted', muted);
+      return muted;
     },
 
     isMuted: function () { return muted; },
@@ -210,6 +338,56 @@ window.EcoDash = window.EcoDash || {};
     toggleMute: function () {
       EcoDash.Audio.setMuted(!muted);
       return muted;
+    },
+
+    /* -------------------------------------------------- master volume -- */
+
+    setMasterVolume: function (value, persist) {
+      masterVolume = clamp01(value);
+      applyVolumes(true);
+      if (persist !== false) writePref('masterVolume', masterVolume);
+      return masterVolume;
+    },
+
+    getMasterVolume: function () { return masterVolume; },
+
+    /* --------------------------------------------------- music volume -- */
+
+    setMusicVolume: function (value, persist) {
+      musicVolume = clamp01(value);
+      applyVolumes(true);
+      if (persist !== false) writePref('musicVolume', musicVolume);
+      return musicVolume;
+    },
+
+    getMusicVolume: function () { return musicVolume; },
+
+    /* ----------------------------------------------------- sfx volume -- */
+
+    setSfxVolume: function (value, persist) {
+      sfxVolume = clamp01(value);
+      applyVolumes(true);
+      if (persist !== false) writePref('sfxVolume', sfxVolume);
+      return sfxVolume;
+    },
+
+    getSfxVolume: function () { return sfxVolume; },
+
+    /* ---------------------------------------------------------- misc --- */
+
+    /* Re-read every persisted pref (useful if another tab changed them). */
+    reloadPrefs: function () {
+      muted        = !!readPref('muted', false);
+      masterVolume = clamp01(readPref('masterVolume', C.audio.masterVolume));
+      musicVolume  = clamp01(readPref('musicVolume', 1));
+      sfxVolume    = clamp01(readPref('sfxVolume', 1));
+      applyVolumes(true);
+      return {
+        muted: muted,
+        master: masterVolume,
+        music: musicVolume,
+        sfx: sfxVolume
+      };
     }
   };
 })(window.EcoDash);
@@ -227,7 +405,17 @@ window.EcoDash = window.EcoDash || {};
   var pointerHeld = false;
   var attached = false;
 
+  /* Keystrokes aimed at a form control (e.g. a volume slider) must reach
+     that control instead of driving the game. */
+  function isTextEntry(el) {
+    if (!el || !el.tagName) return false;
+    if (el.isContentEditable) return true;
+    var tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+
   function onKeyDown(e) {
+    if (isTextEntry(e.target)) return;
     if (BLOCK_DEFAULT.indexOf(e.code) !== -1) e.preventDefault();
     if (e.repeat) return;
     if (!down[e.code]) pressed[e.code] = true;
@@ -235,7 +423,10 @@ window.EcoDash = window.EcoDash || {};
     EcoDash.Audio.unlock();
   }
 
-  function onKeyUp(e) { down[e.code] = false; }
+  function onKeyUp(e) {
+    if (isTextEntry(e.target)) return;
+    down[e.code] = false;
+  }
 
   function clearAll() {
     for (var k in down) down[k] = false;
