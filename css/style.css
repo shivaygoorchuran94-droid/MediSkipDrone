@@ -1,7 +1,7 @@
 /* ==========================================================================
    EcoDash — style.css
-   Layout shell, DOM overlay menus, audio mixer and responsive behaviour.
-   All in-simulation HUD graphics are rendered on the HTML5 Canvas.
+   Layout shell, DOM overlay menus, audio mixer, touch controls and
+   responsive / safe-area behaviour. In-simulation HUD art lives on canvas.
    ========================================================================== */
 
 :root {
@@ -18,36 +18,79 @@
   --muted:      #9fb3c8;
   --radius:     16px;
   --shadow:     0 18px 50px rgba(0, 0, 0, 0.55);
+
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  --icon-size: 44px;
 }
 
 * { box-sizing: border-box; }
 
+html {
+  -webkit-text-size-adjust: 100%;
+          text-size-adjust: 100%;
+}
+
 html, body {
-  margin: 0; padding: 0; height: 100%; overflow: hidden;
-  background: var(--ink); color: var(--text);
+  margin: 0; padding: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--ink);
+  color: var(--text);
   font-family: "Segoe UI", Inter, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
 
-#app { position: fixed; inset: 0; overflow: hidden; }
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
+
+#app {
+  position: fixed; inset: 0; overflow: hidden;
+  -webkit-user-select: none; user-select: none;
+}
 
 #game-canvas {
   display: block; width: 100%; height: 100%;
-  touch-action: none; cursor: crosshair; background: #06111f;
+  touch-action: none; cursor: crosshair;
+  background: #06111f;
 }
+
+/* Invisible probe — JS reads the resolved safe-area insets from this box. */
+#safe-probe {
+  position: fixed; top: 0; left: 0;
+  width: 0; height: 0;
+  padding-top:    var(--safe-t);
+  padding-right:  var(--safe-r);
+  padding-bottom: var(--safe-b);
+  padding-left:   var(--safe-l);
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* ==========================================================================
+   Overlay + panels
+   ========================================================================== */
 
 #overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  padding: 18px; pointer-events: none; z-index: 10;
+  padding: calc(18px + var(--safe-t)) calc(18px + var(--safe-r))
+           calc(18px + var(--safe-b)) calc(18px + var(--safe-l));
+  pointer-events: none; z-index: 10;
 }
 
 .panel {
   pointer-events: auto;
   width: min(560px, 100%);
-  max-height: calc(100vh - 36px);
+  max-height: calc(100vh - 36px - var(--safe-t) - var(--safe-b));
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 28px 30px 24px;
   border-radius: var(--radius);
   border: 1px solid var(--panel-edge);
@@ -57,6 +100,9 @@ html, body {
   box-shadow: var(--shadow);
   text-align: center;
   animation: panelIn 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@supports (height: 100dvh) {
+  .panel { max-height: calc(100dvh - 36px - var(--safe-t) - var(--safe-b)); }
 }
 .panel.hidden { display: none; }
 
@@ -76,6 +122,7 @@ html, body {
 
 .tagline {
   margin: 0 0 16px; font-size: 0.82rem;
+  line-height: 1.5;
   letter-spacing: 2.4px; text-transform: uppercase; color: var(--muted);
 }
 
@@ -91,6 +138,14 @@ html, body {
 .blurb strong { color: var(--gold-soft); font-weight: 600; }
 
 .hint { margin: 14px 0 0; font-size: 0.78rem; color: var(--muted); opacity: 0.85; }
+.hint:empty { display: none; }
+
+/* Rotate nudge — portrait touch devices only. */
+.rotate-hint { display: none; margin: 0 0 14px; font-size: 0.76rem; color: var(--gold-soft); }
+
+/* ==========================================================================
+   Control legend
+   ========================================================================== */
 
 .controls-grid {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -98,12 +153,21 @@ html, body {
 }
 
 .ctrl {
-  display: flex; flex-direction: column; gap: 5px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; min-height: 58px;
   padding: 10px 8px; border-radius: 10px;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 0.76rem; color: var(--muted);
+  font-size: 0.76rem; line-height: 1.25; color: var(--muted);
+  text-align: center;
 }
+
+.tap-icon { font-size: 1.3rem; line-height: 1; color: var(--gold-soft); }
+
+/* Swap the two legends depending on input modality. */
+.touch-only { display: none; }
+body.is-touch .touch-only { display: flex; }
+body.is-touch .no-touch  { display: none; }
 
 kbd {
   display: inline-block; min-width: 22px; padding: 2px 6px;
@@ -112,6 +176,10 @@ kbd {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.72rem; color: var(--text);
 }
+
+/* ==========================================================================
+   Buttons
+   ========================================================================== */
 
 .btn {
   pointer-events: auto; display: inline-block;
@@ -140,8 +208,13 @@ kbd {
 
 .btn-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 
+/* ==========================================================================
+   Stats
+   ========================================================================== */
+
 .stats-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 10px; margin: 0 0 20px;
 }
 
@@ -161,18 +234,24 @@ kbd {
 .stat.best .v { color: var(--green-soft); }
 
 /* ==========================================================================
-   Floating icon buttons (bottom-right)
+   Floating icon buttons
+   Desktop: bottom-right cluster.  Touch: top-right cluster (keeps the
+   bottom corners free for the thrust / dive pads).
    ========================================================================== */
 
 .icon-btn {
-  position: absolute; bottom: 14px; right: 14px; z-index: 20;
-  width: 44px; height: 44px; display: grid; place-items: center;
+  position: absolute; z-index: 20;
+  bottom: calc(14px + var(--safe-b));
+  width: var(--icon-size); height: var(--icon-size);
+  display: grid; place-items: center;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(7, 19, 33, 0.75); color: var(--text);
   font-size: 1.15rem; line-height: 1; cursor: pointer;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
 }
 .icon-btn:hover {
@@ -183,24 +262,81 @@ kbd {
 .icon-btn:active { transform: scale(1.0); }
 .icon-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
-#btn-settings { right: 66px; }
+#btn-mute     { right: calc(14px  + var(--safe-r)); }
+#btn-settings { right: calc(66px  + var(--safe-r)); }
+#btn-pause    { right: calc(118px + var(--safe-r)); display: none; }
+
+body[data-state="playing"] #btn-pause,
+body[data-state="paused"]  #btn-pause { display: grid; }
+
 #btn-settings[aria-expanded="true"] {
   background: rgba(242, 177, 52, 0.22);
   border-color: rgba(242, 177, 52, 0.75);
   color: var(--gold-soft);
 }
 
+body.is-touch .icon-btn {
+  --icon-size: 38px;
+  top: calc(10px + var(--safe-t));
+  bottom: auto;
+  font-size: 1rem;
+}
+body.is-touch #btn-mute     { right: calc(10px + var(--safe-r)); }
+body.is-touch #btn-settings { right: calc(54px + var(--safe-r)); }
+body.is-touch #btn-pause    { right: calc(98px + var(--safe-r)); }
+
 /* ==========================================================================
-   Audio mixer panel — a modal, centred over everything else.
-   It lives outside #overlay so it can appear on top of any game screen.
+   On-screen flight controls (touch only, gameplay only)
+   ========================================================================== */
+
+#touch-controls {
+  position: absolute; inset: 0; z-index: 15;
+  pointer-events: none;
+  display: none;
+}
+body.is-touch[data-state="playing"] #touch-controls { display: block; }
+
+.touch-btn {
+  position: absolute;
+  bottom: calc(14px + var(--safe-b));
+  width: clamp(66px, 19vw, 96px);
+  height: clamp(66px, 19vw, 96px);
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.20);
+  background: rgba(7, 19, 33, 0.52);
+  color: rgba(234, 242, 251, 0.92);
+  font-size: clamp(1.3rem, 4.6vw, 1.9rem); line-height: 1;
+  pointer-events: auto; cursor: pointer;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  transition: transform .09s ease, background .12s ease, border-color .12s ease;
+}
+.touch-btn-thrust { right: calc(14px + var(--safe-r)); border-color: rgba(102, 224, 138, 0.35); }
+.touch-btn-dive   { left:  calc(14px + var(--safe-l)); border-color: rgba(255, 209, 102, 0.30); }
+
+.touch-btn.pressed {
+  transform: scale(0.93);
+  background: rgba(47, 168, 79, 0.42);
+  border-color: rgba(102, 224, 138, 0.85);
+}
+.touch-btn-dive.pressed {
+  background: rgba(242, 177, 52, 0.38);
+  border-color: rgba(255, 209, 102, 0.85);
+}
+
+/* ==========================================================================
+   Audio mixer panel
    ========================================================================== */
 
 #settings-panel {
   position: absolute;
-  top: 50%;
-  left: 50%;
+  top: 50%; left: 50%;
   z-index: 30;
-  width: min(460px, calc(100vw - 36px));
+  width: min(460px, calc(100vw - 28px - var(--safe-l) - var(--safe-r)));
   padding: 24px 26px 20px;
   pointer-events: auto;
   animation: settingsIn 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
@@ -235,31 +371,22 @@ kbd {
 
 .vol-row label {
   text-align: left;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 1.4px;
-  text-transform: uppercase;
+  font-size: 0.72rem; font-weight: 700;
+  letter-spacing: 1.4px; text-transform: uppercase;
   color: var(--muted);
 }
 
 .vol-value {
   text-align: right;
-  font-size: 0.8rem;
-  font-weight: 700;
+  font-size: 0.8rem; font-weight: 700;
   color: var(--gold-soft);
   font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------------------------------------- sliders -- */
-
 .vol-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  outline: none;
-  cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 6px;
+  border-radius: 999px; outline: none; cursor: pointer;
   touch-action: pan-y;
   background:
     linear-gradient(to right,
@@ -270,18 +397,12 @@ kbd {
   transition: filter 0.15s ease;
 }
 .vol-slider:hover { filter: brightness(1.12); }
-.vol-slider:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 6px;
-}
+.vol-slider:focus-visible { outline: 2px solid var(--gold); outline-offset: 6px; }
 
 .vol-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  background: var(--gold);
-  border: 2px solid #08131f;
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--gold); border: 2px solid #08131f;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
@@ -289,70 +410,102 @@ kbd {
   transform: scale(1.14);
   box-shadow: 0 0 0 5px rgba(242, 177, 52, 0.20), 0 2px 10px rgba(0, 0, 0, 0.55);
 }
-
-.vol-slider::-moz-range-track {
-  height: 6px;
-  border-radius: 999px;
-  background: transparent;
-}
+.vol-slider::-moz-range-track { height: 6px; border-radius: 999px; background: transparent; }
 .vol-slider::-moz-range-thumb {
-  width: 15px; height: 15px;
-  border-radius: 50%;
-  background: var(--gold);
-  border: 2px solid #08131f;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
-  cursor: pointer;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--gold); border: 2px solid #08131f;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55); cursor: pointer;
   transition: transform 0.12s ease;
 }
 .vol-slider::-moz-range-thumb:hover { transform: scale(1.14); }
 .vol-slider::-moz-focus-outer { border: 0; }
 
-/* --------------------------------------------------------------- note -- */
-
 .mixer-note {
   margin: 0 0 16px;
-  font-size: 0.74rem;
-  letter-spacing: 0.4px;
-  color: var(--muted);
-  text-align: center;
+  font-size: 0.74rem; letter-spacing: 0.4px;
+  color: var(--muted); text-align: center;
 }
 .mixer-note.muted { color: var(--danger); }
 
 /* ==========================================================================
-   Responsive
+   Responsive — tablets & narrow windows
    ========================================================================== */
 
-@media (max-width: 560px) {
-  .panel { padding: 22px 18px 18px; }
-  .controls-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
-  .btn { padding: 12px 20px; font-size: 0.9rem; }
-  .stat .v { font-size: 1.05rem; }
+@media (max-width: 700px) {
+  #overlay {
+    padding: calc(12px + var(--safe-t)) calc(12px + var(--safe-r))
+             calc(12px + var(--safe-b)) calc(12px + var(--safe-l));
+  }
+  .panel { padding: 24px 20px 20px; border-radius: 14px; }
+
+  .tagline {
+    font-size: 0.7rem;
+    letter-spacing: 1.2px;
+    margin-bottom: 14px;
+  }
+  .blurb { font-size: 0.86rem; line-height: 1.6; }
+
+  .controls-grid { gap: 7px; margin-bottom: 18px; }
+  .ctrl { min-height: 54px; padding: 9px 7px; font-size: 0.72rem; }
+  .tap-icon { font-size: 1.15rem; }
+
+  .btn { padding: 12px 20px; font-size: 0.92rem; }
+  #screen-start .btn-primary,
+  #screen-over  .btn-primary { display: block; width: 100%; margin: 4px 0; }
+  #screen-pause .btn { flex: 1 1 auto; }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px; margin-bottom: 18px;
+  }
+  .stat { padding: 10px 6px; }
+  .stat .k { font-size: 0.6rem; letter-spacing: 1.1px; }
+  .stat .v { font-size: 1rem; }
 
   #settings-panel { padding: 20px 16px 16px; }
   .mixer { padding: 14px 12px 4px; }
-  .vol-row { grid-template-columns: 62px 1fr 42px; gap: 8px; }
-  .vol-row label { font-size: 0.66rem; letter-spacing: 1px; }
+  .vol-row { grid-template-columns: 58px 1fr 42px; gap: 9px; margin-bottom: 12px; }
+  .vol-row label { font-size: 0.64rem; letter-spacing: 0.8px; }
   .vol-value { font-size: 0.74rem; }
-
-  .icon-btn { width: 40px; height: 40px; font-size: 1.05rem; }
-  #btn-settings { right: 60px; }
 }
 
-@media (max-height: 520px) and (orientation: landscape) {
-  .panel { padding: 16px 22px; }
-  .blurb { margin-bottom: 10px; font-size: 0.84rem; }
-  .controls-grid { display: none; }
-  .logo { font-size: 1.9rem; }
+@media (orientation: portrait) {
+  body.is-touch .rotate-hint { display: block; }
+}
 
-  #settings-panel { padding: 16px 20px; max-height: calc(100vh - 24px); }
+/* ==========================================================================
+   Responsive — very short viewports (landscape phones)
+   ========================================================================== */
+
+@media (max-height: 460px) and (orientation: landscape) {
+  #overlay {
+    padding: calc(8px + var(--safe-t)) calc(14px + var(--safe-r))
+             calc(8px + var(--safe-b)) calc(14px + var(--safe-l));
+  }
+  .panel { padding: 14px 18px 12px; }
+  .logo { font-size: 1.7rem; margin-bottom: 2px; }
+  .tagline { font-size: 0.62rem; letter-spacing: 1px; margin-bottom: 8px; }
+  .blurb { font-size: 0.78rem; margin-bottom: 10px; line-height: 1.45; }
+  .controls-grid { display: none; }
+  .rotate-hint { display: none !important; }
+  .hint { margin-top: 8px; font-size: 0.7rem; }
+  .btn { padding: 10px 18px; font-size: 0.86rem; }
+  .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; }
+  .stat { padding: 8px 5px; }
+  .stat .v { font-size: 0.95rem; }
+
+  #settings-panel { padding: 14px 18px; }
   #settings-panel .blurb { margin-bottom: 12px; }
-  .mixer { margin-bottom: 10px; padding: 12px 14px 2px; }
+  .mixer { margin-bottom: 10px; padding: 10px 12px 0; }
   .vol-row { margin-bottom: 10px; }
   .mixer-note { margin-bottom: 10px; }
+
+  .touch-btn { width: clamp(56px, 16vh, 74px); height: clamp(56px, 16vh, 74px); font-size: 1.2rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .panel { animation: none; }
   #settings-panel { animation: none; transform: translate(-50%, -50%); }
-  .btn, .icon-btn, .vol-slider, .vol-slider::-webkit-slider-thumb { transition: none; }
+  .btn, .icon-btn, .touch-btn, .vol-slider,
+  .vol-slider::-webkit-slider-thumb { transition: none; }
 }

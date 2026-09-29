@@ -394,6 +394,18 @@ window.EcoDash = window.EcoDash || {};
 
 /* ==========================================================================
    Input — unified keyboard + pointer/touch
+
+   Sources are OR-ed together so any input modality can drive the drone:
+
+     keyboard  →  W / ↑ / Space   thrust
+                  S / ↓           descend
+     pointer   →  press-and-hold on the canvas (thrust)
+     touch pads→  on-screen ▲ / ▼ buttons routed here via setTouchThrust()
+                  and setTouchDive(), so gameplay code never needs to know
+                  they exist.
+
+   Keys aimed at a form control (e.g. a volume slider) are passed through
+   untouched.
    ========================================================================== */
 (function (EcoDash) {
   'use strict';
@@ -402,11 +414,13 @@ window.EcoDash = window.EcoDash || {};
 
   var down    = Object.create(null);
   var pressed = Object.create(null);
+
   var pointerHeld = false;
+  var touchThrust = false;
+  var touchDive   = false;
+
   var attached = false;
 
-  /* Keystrokes aimed at a form control (e.g. a volume slider) must reach
-     that control instead of driving the game. */
   function isTextEntry(el) {
     if (!el || !el.tagName) return false;
     if (el.isContentEditable) return true;
@@ -431,6 +445,8 @@ window.EcoDash = window.EcoDash || {};
   function clearAll() {
     for (var k in down) down[k] = false;
     pointerHeld = false;
+    touchThrust = false;
+    touchDive   = false;
   }
 
   EcoDash.Input = {
@@ -446,26 +462,36 @@ window.EcoDash = window.EcoDash || {};
       });
 
       if (canvas) {
+        /* Press-and-hold anywhere on the canvas is a bonus thrust input
+           for touch users; the dedicated on-screen pads are handled
+           separately and do not go through this path. */
         canvas.addEventListener('pointerdown', function (e) {
           if (e.target !== canvas) return;
           pointerHeld = true;
           pressed['Pointer'] = true;
           EcoDash.Audio.unlock();
-          e.preventDefault();
-        });
+          if (e.pointerType !== 'mouse') e.preventDefault();
+        }, { passive: false });
+
         canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
       }
 
-      window.addEventListener('pointerup', function () { pointerHeld = false; });
+      window.addEventListener('pointerup',     function () { pointerHeld = false; });
       window.addEventListener('pointercancel', function () { pointerHeld = false; });
     },
 
     get thrust() {
-      return !!(down['ArrowUp'] || down['KeyW'] || down['Space'] || pointerHeld);
+      return !!(down['ArrowUp'] || down['KeyW'] || down['Space'] ||
+                pointerHeld || touchThrust);
     },
     get descend() {
-      return !!(down['ArrowDown'] || down['KeyS']);
+      return !!(down['ArrowDown'] || down['KeyS'] || touchDive);
     },
+
+    /* Driven by the on-screen ▲ / ▼ pads. */
+    setTouchThrust: function (v) { touchThrust = !!v; },
+    setTouchDive:   function (v) { touchDive   = !!v; },
+    releaseTouch:   function ()  { touchThrust = false; touchDive = false; },
 
     pressed: function (code) { return !!pressed[code]; },
 

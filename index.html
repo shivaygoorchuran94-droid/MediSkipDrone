@@ -14,12 +14,21 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body data-state="menu">
+<script>
+  /* Runs before any visible content so touch-only styling applies with no flash. */
+  (function () {
+    var touch = ('ontouchstart' in window) ||
+                (navigator.maxTouchPoints > 0) ||
+                (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    if (touch) document.body.classList.add('is-touch');
+  })();
+</script>
 
   <div id="app">
     <canvas id="game-canvas" aria-label="EcoDash simulation viewport" role="img"></canvas>
 
-    <!-- Invisible probe: lets JS read the CSS safe-area insets so the
-         canvas HUD can avoid notches and home indicators. -->
+    <!-- Invisible probe: lets JS read the CSS safe-area insets so the canvas
+         HUD can avoid notches and home indicators. -->
     <div id="safe-probe" aria-hidden="true"></div>
 
     <div id="overlay">
@@ -41,7 +50,7 @@
           <div class="ctrl no-touch"><kbd>P</kbd> / <kbd>Esc</kbd><span>Pause</span></div>
           <div class="ctrl no-touch"><kbd>M</kbd><span>Mute audio</span></div>
 
-          <div class="ctrl touch-only"><span class="tap-icon">▲</span><span>Hold to thrust</span></div>
+          <div class="ctrl touch-only"><span class="tap-icon">▲</span><span>Hold to climb</span></div>
           <div class="ctrl touch-only"><span class="tap-icon">▼</span><span>Hold to descend</span></div>
           <div class="ctrl touch-only"><span class="tap-icon">⏸</span><span>Pause button</span></div>
           <div class="ctrl touch-only"><span class="tap-icon">⚙</span><span>Audio settings</span></div>
@@ -61,7 +70,7 @@
           <button id="btn-resume" class="btn btn-primary" type="button">▶ Resume</button>
           <button id="btn-restart-pause" class="btn" type="button">↻ Restart</button>
         </div>
-        <p class="hint"><span class="no-touch">Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</span></p>
+        <p class="hint no-touch">Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume</p>
       </section>
 
       <!-- GAME OVER -->
@@ -70,12 +79,12 @@
         <p id="over-reason" class="blurb"></p>
         <div id="over-stats" class="stats-grid"></div>
         <button id="btn-restart" class="btn btn-primary" type="button">↻ Fly Again</button>
-        <p class="hint"><span class="no-touch">Press <kbd>R</kbd> or <kbd>Space</kbd> to restart</span></p>
+        <p class="hint no-touch">Press <kbd>R</kbd> or <kbd>Space</kbd> to restart</p>
       </section>
     </div>
 
-    <!-- ON-SCREEN TOUCH CONTROLS (only shown on touch devices while playing) -->
-    <div id="touch-controls" aria-hidden="true">
+    <!-- ON-SCREEN TOUCH CONTROLS (touch devices, gameplay only) -->
+    <div id="touch-controls">
       <button id="btn-dive" class="touch-btn touch-btn-dive" type="button" aria-label="Descend">
         <span aria-hidden="true">▼</span>
       </button>
@@ -121,7 +130,7 @@
       <button id="btn-close-settings" class="btn btn-primary" type="button">Done</button>
     </section>
 
-    <button id="btn-pause" class="icon-btn hidden" type="button"
+    <button id="btn-pause" class="icon-btn" type="button"
             aria-label="Pause mission" title="Pause (P)">
       <span aria-hidden="true">⏸</span>
     </button>

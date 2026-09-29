@@ -6,6 +6,8 @@ window.EcoDash = window.EcoDash || {};
 
 /* ==========================================================================
    HUD — canvas-rendered heads-up display
+   Two layouts: a wide "desktop" arrangement and a stacked "mobile" one
+   that keeps the top-right corner free for the DOM icon buttons.
    ========================================================================== */
 (function (EcoDash) {
   'use strict';
@@ -13,7 +15,6 @@ window.EcoDash = window.EcoDash || {};
   var U = EcoDash.Utils;
   var C = EcoDash.Config;
 
-  /* --------------------------------------------------------- primitives */
   function panel(ctx, x, y, w, h) {
     ctx.save();
     U.roundRect(ctx, x, y, w, h, 10);
@@ -33,13 +34,21 @@ window.EcoDash = window.EcoDash || {};
     ctx.fillText(text, x, y);
   }
 
-  /* -------------------------------------------------------------- HUD --- */
   var HUD = {
 
     draw: function (ctx, game, w, h) {
-      var s = U.clamp(w / 1280, 0.72, 1.35);
       ctx.save();
       ctx.textBaseline = 'alphabetic';
+
+      if (game.useMobileHUD) HUD._drawMobile(ctx, game, w, h);
+      else                   HUD._drawDesktop(ctx, game, w, h);
+
+      ctx.restore();
+    },
+
+    /* ================================================== DESKTOP LAYOUT == */
+    _drawDesktop: function (ctx, game, w, h) {
+      var s = U.clamp(w / 1280, 0.72, 1.35);
 
       /* -------------------------------------------------- TOP LEFT --- */
       var px = 16 * s, py = 16 * s;
@@ -69,7 +78,7 @@ window.EcoDash = window.EcoDash || {};
 
       /* ----------------------------------------------- TOP CENTRE --- */
       HUD._drawWeatherChip(ctx, game, w / 2, py, s);
-      HUD._drawLoadSheddingBanner(ctx, game, w / 2, py + 52 * s, s);
+      HUD._drawLoadSheddingBanner(ctx, game, w / 2, py + 52 * s, s, false);
 
       /* ---------------------------------------------- BOTTOM LEFT --- */
       HUD._drawBattery(ctx, game, px, h - 78 * s, 300 * s, s);
@@ -79,8 +88,102 @@ window.EcoDash = window.EcoDash || {};
 
       /* -------------------------------------------- WIND INDICATOR --- */
       HUD._drawWind(ctx, game, w / 2, h - 46 * s, s);
+    },
 
-      ctx.restore();
+    /* =================================================== MOBILE LAYOUT == */
+    _drawMobile: function (ctx, game, w, h) {
+      var s = U.clamp(Math.min(w / 380, (h / 640) * 1.15), 0.78, 1.45);
+
+      var padT = 8  * s + (game.safeTop    || 0);
+      var padL = 10 * s + (game.safeLeft   || 0);
+      var padR = 10 * s + (game.safeRight  || 0);
+      var padB = 10 * s + (game.safeBottom || 0);
+
+      /* Reserve the top-right corner when the DOM icon buttons live there. */
+      var btnReserve = game.isTouch ? 140 : 0;
+
+      /* ------------------------------------------ score card (top-left) */
+      var pw = U.clamp(w - padL - padR - btnReserve, 148, 300 * s);
+      var ph = 58 * s;
+      var px = padL;
+      var py = padT;
+
+      panel(ctx, px, py, pw, ph);
+
+      label(ctx, 'SCORE', px + 11 * s, py + 16 * s, 8.5 * s, '#9fb3c8', 'left', 700);
+      label(ctx, U.formatNumber(game.score), px + 11 * s, py + 40 * s, 21 * s, '#ffd166', 'left', 700);
+
+      label(ctx, U.formatDistance(game.distance),
+            px + pw - 11 * s, py + 16 * s, 11 * s, '#eaf2fb', 'right', 600);
+      label(ctx, game.deliveries + ' DEL · ' + game.cargo + ' CARGO',
+            px + pw - 11 * s, py + 31 * s, 8.5 * s, '#66e08a', 'right', 700);
+      label(ctx, 'BEST ' + U.formatNumber(game.bestScore),
+            px + pw - 11 * s, py + 46 * s, 8.5 * s, '#9fb3c8', 'right', 700);
+
+      /* -------------------------------------------------- battery bar -- */
+      var by = py + ph + 9 * s;
+      var bw = U.clamp(w - padL - padR, 148, 360 * s);
+      var bph = 34 * s;
+
+      panel(ctx, px, by, bw, bph);
+
+      var battery = game.drone ? game.drone.battery : 0;
+      var ratio = battery / C.player.batteryMax;
+
+      label(ctx, 'SOLAR RESERVE', px + 11 * s, by + 13 * s, 8 * s, '#9fb3c8', 'left', 700);
+      label(ctx, Math.round(battery) + '%', px + bw - 11 * s, by + 13 * s, 11 * s, '#eaf2fb', 'right', 700);
+
+      var barX = px + 11 * s;
+      var barY = by + 18 * s;
+      var barW = bw - 22 * s;
+      var barH = 11 * s;
+
+      U.roundRect(ctx, barX, barY, barW, barH, barH / 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fill();
+
+      var bcol = ratio > 0.55 ? '#2fa84f' : ratio > 0.25 ? '#f2b134' : '#ff5a4d';
+      var fillW = Math.max(0, (barW - 3 * s) * ratio);
+
+      if (fillW > 0.5) {
+        var pulse = ratio <= 0.25 ? (0.62 + 0.38 * Math.sin(game.elapsed * 10)) : 1;
+        ctx.save();
+        ctx.globalAlpha = pulse;
+        U.roundRect(ctx, barX + 1.5 * s, barY + 1.5 * s, fillW, barH - 3 * s, (barH - 3 * s) / 2);
+        ctx.fillStyle = bcol;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      if (game.drone && game.drone.inSolar && !game.loadShedding.active) {
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.25 * Math.sin(game.elapsed * 8);
+        ctx.strokeStyle = '#ffd166';
+        ctx.lineWidth = 2;
+        U.roundRect(ctx, barX, barY, barW, barH, barH / 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      /* ----------------------------------------- weather + flight info */
+      var wy = by + bph + 8 * s;
+      HUD._drawMobileWeather(ctx, game, px, wy, s);
+
+      var infoX = px + 150 * s + 12 * s;
+      if (infoX + 90 * s < w - padR) {
+        label(ctx, U.formatTime(game.elapsed) + ' · ' + game.efficiency().toFixed(1) + ' m/%',
+              infoX, wy + 17 * s, 9.5 * s, '#9fb3c8', 'left', 600);
+      }
+
+      /* ---------------------------------------- load-shedding banner -- */
+      if (game.loadShedding.active) {
+        HUD._drawLoadSheddingBanner(ctx, game, w / 2, wy + 32 * s, s * 0.92, true);
+      }
+
+      /* ---------------------------------------------- wind indicator -- */
+      if (Math.abs(game.weather.windY) >= 6) {
+        HUD._drawWind(ctx, game, w / 2, h - padB - 22 * s, s * 0.85);
+      }
     },
 
     /* ------------------------------------------------------ WEATHER -- */
@@ -109,7 +212,6 @@ window.EcoDash = window.EcoDash || {};
 
       ctx.textBaseline = 'alphabetic';
 
-      /* Intensity meter */
       var meterW = 46 * s;
       var mx = cx + wWidth / 2 - meterW - 12 * s;
       var my = y + wHeight / 2 - 3 * s;
@@ -123,30 +225,68 @@ window.EcoDash = window.EcoDash || {};
       ctx.fill();
     },
 
-    /* --------------------------------------------- LOAD-SHEDDING ----- */
-    _drawLoadSheddingBanner: function (ctx, game, cx, y, s) {
-      if (!game.loadShedding.active) return;
+    /* Compact left-aligned weather chip for narrow screens. */
+    _drawMobileWeather: function (ctx, game, x, y, s) {
+      var weather = game.weather;
+      var cw = 150 * s;
+      var ch = 26 * s;
 
-      var bw = 250 * s;
-      var bh = 32 * s;
-      var pulse = 0.55 + 0.45 * Math.sin(game.elapsed * 6);
+      panel(ctx, x, y, cw, ch);
+
+      var icon = '☀';
+      var color = '#ffd166';
+      if (weather.type === 'rain')      { icon = '🌧'; color = '#8ec7ff'; }
+      else if (weather.type === 'dust') { icon = '🌪'; color = '#e0b070'; }
+      else if (weather.type === 'wind') { icon = '💨'; color = '#cfe9ff'; }
 
       ctx.save();
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+
+      ctx.font = (13 * s) + 'px "Segoe UI Emoji", "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = color;
+      ctx.fillText(icon, x + 9 * s, y + ch / 2 + 1);
+
+      ctx.font = '700 ' + (9.5 * s) + 'px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = '#eaf2fb';
+      ctx.fillText(weather.label.toUpperCase(), x + 30 * s, y + ch / 2 + 1);
+
+      ctx.restore();
+    },
+
+    /* --------------------------------------------- LOAD-SHEDDING ----- */
+    _drawLoadSheddingBanner: function (ctx, game, cx, y, s, compact) {
+      if (!game.loadShedding.active) return;
+
+      var text = compact
+        ? '⚠ LOAD-SHEDDING · STAGE ' + game.loadShedding.stage
+        : '⚠ LOAD-SHEDDING — STAGE ' + game.loadShedding.stage + ' — GRID OFFLINE';
+
+      var fontSize = (compact ? 10.5 : 12) * s;
+
+      ctx.save();
+      ctx.font = '700 ' + fontSize + 'px "Segoe UI", system-ui, sans-serif';
+
+      var tw = ctx.measureText(text).width;
+      var bw = tw + 28 * s;
+      var bh = (compact ? 26 : 32) * s;
+      var pulse = 0.55 + 0.45 * Math.sin(game.elapsed * 6);
+
       U.roundRect(ctx, cx - bw / 2, y, bw, bh, 8);
       ctx.fillStyle = 'rgba(120, 16, 16, ' + (0.55 + pulse * 0.22).toFixed(3) + ')';
       ctx.fill();
       ctx.strokeStyle = 'rgba(255, 90, 77, ' + (0.55 + pulse * 0.4).toFixed(3) + ')';
       ctx.lineWidth = 1.6;
       ctx.stroke();
-      ctx.restore();
 
-      ctx.font = '700 ' + (12 * s) + 'px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = '#ffd7d3';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#ffd7d3';
-      ctx.fillText('⚠ LOAD-SHEDDING — STAGE ' + game.loadShedding.stage + ' — GRID OFFLINE',
-                   cx, y + bh / 2 + 1);
+      ctx.fillText(text, cx, y + bh / 2 + 1);
+
       ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+      ctx.restore();
     },
 
     /* ------------------------------------------------------ BATTERY -- */
@@ -314,9 +454,16 @@ window.EcoDash = window.EcoDash || {};
     this.onStateChange = null;
     this.onMuteChange = null;
 
-    /* When true the keyboard/gamepad layer ignores gameplay keys — used
-       while a modal DOM panel (e.g. Audio Settings) has focus. */
     this.uiBlocked = false;
+
+    /* Device capabilities — drive the HUD density and DOM layout. */
+    this.isTouch = ('ontouchstart' in window) ||
+                   (navigator.maxTouchPoints > 0) ||
+                   (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+
+    this.useMobileHUD = false;
+    this.safeTop = this.safeRight = this.safeBottom = this.safeLeft = 0;
+    this._safeProbe = null;
 
     this.input   = EcoDash.Input;
     this.audio   = EcoDash.Audio;
@@ -329,14 +476,12 @@ window.EcoDash = window.EcoDash || {};
     this.entities = [];
     this.drone = null;
 
-    /* Load and restore persistent state. */
     this.scores = this.storage.getScores();
     this.bestScore = this.scores.length ? this.scores[0].score : 0;
     this.lastEntry = null;
 
     this.audio.setMuted(this.storage.getPref('muted', false));
 
-    /* Loop bookkeeping. */
     this._rafId = 0;
     this._lastTime = 0;
     this._boundLoop = this.loop.bind(this);
@@ -349,17 +494,33 @@ window.EcoDash = window.EcoDash || {};
      LIFECYCLE
      ====================================================================== */
 
+  Game.prototype.readSafeArea = function () {
+    if (!this._safeProbe) this._safeProbe = document.getElementById('safe-probe');
+    if (!this._safeProbe) return;
+    var cs = window.getComputedStyle(this._safeProbe);
+    this.safeTop    = parseFloat(cs.paddingTop)    || 0;
+    this.safeRight  = parseFloat(cs.paddingRight)  || 0;
+    this.safeBottom = parseFloat(cs.paddingBottom) || 0;
+    this.safeLeft   = parseFloat(cs.paddingLeft)   || 0;
+  };
+
   Game.prototype.resize = function () {
     var rect = this.canvas.getBoundingClientRect();
 
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.width  = Math.max(320, Math.floor(rect.width  || window.innerWidth));
-    this.height = Math.max(240, Math.floor(rect.height || window.innerHeight));
+    this.width  = Math.max(280, Math.floor(rect.width  || window.innerWidth));
+    this.height = Math.max(220, Math.floor(rect.height || window.innerHeight));
 
     this.canvas.width  = Math.floor(this.width  * this.dpr);
     this.canvas.height = Math.floor(this.height * this.dpr);
 
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    this.readSafeArea();
+
+    /* Use the compact HUD on touch devices and on narrow windows — this
+       keeps the top-right corner free for the DOM icon buttons. */
+    this.useMobileHUD = this.isTouch || this.width < 700;
 
     this.groundY = Math.floor(this.height * C.world.groundRatio);
 
@@ -370,7 +531,7 @@ window.EcoDash = window.EcoDash || {};
   };
 
   Game.prototype.playerX = function () {
-    return Math.round(U.clamp(this.width * 0.24, 120, 340));
+    return Math.round(U.clamp(this.width * 0.22, 80, 340));
   };
 
   Game.prototype.resetRun = function () {
@@ -408,10 +569,8 @@ window.EcoDash = window.EcoDash || {};
     this.resetRun();
     this.setState('playing');
 
-    this.audio.unlock();          /* also (idempotently) starts music */
+    this.audio.unlock();
     this.audio.play('click');
-    /* Music is now constant — the scheduler keeps running across every
-       state change, so startMusic() here is a harmless no-op. */
     this.audio.startMusic();
   };
 
@@ -420,16 +579,12 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.pause = function () {
     if (this.state !== 'playing') return;
     this.setState('paused');
-    /* NOTE: music is intentionally NOT stopped here — it plays
-       continuously through pause, game-over, restart, and every other
-       state for the whole session. */
   };
 
   Game.prototype.resume = function () {
     if (this.state !== 'paused') return;
     this.setState('playing');
     this.audio.unlock();
-    /* No explicit startMusic() needed — the loop is already running. */
   };
 
   Game.prototype.togglePause = function () {
@@ -443,7 +598,6 @@ window.EcoDash = window.EcoDash || {};
   };
 
   Game.prototype.toggleMute = function () {
-    /* Audio.toggleMute() already persists the pref. */
     return this.audio.toggleMute();
   };
 
@@ -456,10 +610,6 @@ window.EcoDash = window.EcoDash || {};
 
     this.gameOverReason = reason || 'crash';
 
-    /* ------------------------------------------------------------------
-       Compute the score entry and persist it BEFORE firing setState(),
-       otherwise the HUD reads stale lastEntry / bestScore.
-       ------------------------------------------------------------------ */
     var entry = {
       score: Math.floor(this.score),
       distance: Math.floor(this.distance),
@@ -474,8 +624,6 @@ window.EcoDash = window.EcoDash || {};
     this.scores = this.storage.saveScore(entry);
     this.bestScore = this.scores.length ? this.scores[0].score : entry.score;
 
-    /* Now flip state so the overlay reads the fresh values.
-       Music is intentionally left running underneath the game-over panel. */
     this.setState('over');
     this.audio.play('crash');
 
@@ -484,7 +632,6 @@ window.EcoDash = window.EcoDash || {};
 
     var d = this.drone;
 
-    /* Explosion / debris / sparks. */
     this.particles.burst(d.x, d.y, 34, {
       speedMin: 60, speedMax: 340,
       lifeMin: 0.45, lifeMax: 1.3,
@@ -537,7 +684,6 @@ window.EcoDash = window.EcoDash || {};
     if (this.state === 'playing') {
       this.updatePlaying(dt);
     } else if (this.state === 'menu') {
-      /* Attract-mode idle hover. */
       if (this.drone) {
         this.drone.bobPhase += dt * 3.1;
         this.drone.rotorPhase += dt * 22;
@@ -594,33 +740,26 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.updatePlaying = function (dt) {
     this.elapsed += dt;
 
-    /* Difficulty ramp. */
     this.worldSpeed = U.lerp(
       C.world.scrollSpeedStart,
       C.world.scrollSpeedMax,
       this.difficulty()
     );
 
-    /* Distance + score. */
     var metres = (this.worldSpeed * dt) / C.world.pixelsPerMetre;
     this.distance += metres;
     this.score += metres * C.scoring.pointPerMetre;
 
     this.updateLoadShedding(dt);
 
-    /* Scroll + tick entities. */
     for (var i = 0; i < this.entities.length; i++) {
       var e = this.entities[i];
       e.x -= this.worldSpeed * dt;
       e.update(dt, this);
     }
 
-    /* Player physics — uses the inSolar flag set by the *previous* frame's
-       handleInteractions() call, giving solar regen a one-frame latency
-       (imperceptible) but guaranteeing it actually fires. */
     this.drone.update(dt, this);
 
-    /* Spawning. */
     this.spawnTimer -= dt;
     this.solarCooldown -= dt;
     if (this.spawnTimer <= 0) {
@@ -628,17 +767,14 @@ window.EcoDash = window.EcoDash || {};
       this.spawnFeature();
     }
 
-    /* Interactions (collisions, pickups, recharge) — also resets inSolar. */
     this.handleInteractions();
 
-    /* Cull dead / off-screen entities. */
     for (var j = this.entities.length - 1; j >= 0; j--) {
       if (this.entities[j].dead || this.entities[j].isOffScreen()) {
         this.entities.splice(j, 1);
       }
     }
 
-    /* Crash checks. */
     if (this.drone.hitGround) {
       this.gameOver('ground');
     } else if (this.drone.battery <= 0) {
@@ -670,7 +806,6 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.handleInteractions = function () {
     var d = this.drone;
 
-    /* Save previous frame's solar state, then reset. */
     d.wasInSolar = d.inSolar;
     d.inSolar = false;
 
@@ -684,7 +819,6 @@ window.EcoDash = window.EcoDash || {};
           return;
         }
 
-        /* Horn when an obstacle is safely cleared. */
         var eRight = e.shape === 'circle' ? (e.x + e.radius) : (e.x + e.w);
         if (!e.passed && eRight < d.x - 30) {
           e.passed = true;
@@ -741,7 +875,6 @@ window.EcoDash = window.EcoDash || {};
       color: '255, 214, 110', drag: 1.4
     });
 
-    /* Every N pods completes a delivery. */
     if (this.cargoSinceDelivery >= C.scoring.podsPerDelivery) {
       this.cargoSinceDelivery = 0;
       this.deliveries++;
@@ -771,19 +904,16 @@ window.EcoDash = window.EcoDash || {};
   Game.prototype.spawnFeature = function () {
     var roll = Math.random();
 
-    /* 13% chance of a recharge zone (gated by cooldown). */
     if (this.solarCooldown <= 0 && roll < 0.13) {
       this.spawnSolarZone();
       return;
     }
 
-    /* 39% chance of a cargo arc (roll 0.13..0.52). */
     if (roll < 0.52) {
       this.spawnCargoArc();
       return;
     }
 
-    /* Otherwise, an obstacle. */
     this.spawnObstacle();
   };
 
@@ -862,54 +992,39 @@ window.EcoDash = window.EcoDash || {};
 
     ctx.save();
 
-    /* Screen shake on impact. */
     if (this.shake > 0) {
       var mag = this.shake * 14;
       ctx.translate(U.rand(-mag, mag), U.rand(-mag, mag));
     }
 
-    /* 1. Backdrop (sky, celestial, parallax layers, ground). */
     this.background.draw(ctx);
-
-    /* 2. Night-time darkening over the world. */
     this.background.drawNightOverlay(ctx);
 
-    /* 3. Headlight cone (drawn before entities so it reads as a glow). */
     if (this.drone && this.state !== 'menu') {
       this.drone.drawHeadlight(ctx);
     }
 
-    /* 4. World entities. */
     for (var i = 0; i < this.entities.length; i++) {
       this.entities[i].draw(ctx, this);
     }
 
-    /* 5. Player — hidden once the crash is registered. */
     if (this.drone && this.state !== 'over') {
       this.drone.draw(ctx, this);
     }
 
-    /* 6. Particles. */
     this.particles.draw(ctx);
-
-    /* 7. Weather effects. */
     this.weather.draw(ctx, w, h);
-
-    /* 8. Light tint so entities sit inside the night. */
     this.background.drawEntityNightTint(ctx);
 
-    /* 9. Load-shedding ambient dim. */
     if (this.loadShedding.active && this.state === 'playing') {
       ctx.fillStyle = 'rgba(10, 6, 4, 0.14)';
       ctx.fillRect(0, 0, w, h);
     }
 
-    /* 10. Lightning flash. */
     this.weather.drawFlash(ctx, w, h);
 
     ctx.restore();
 
-    /* 11. HUD (never shakes). */
     if (this.state === 'playing' || this.state === 'paused' || this.state === 'over') {
       EcoDash.HUD.draw(ctx, this, w, h);
     }
@@ -935,7 +1050,6 @@ window.EcoDash = window.EcoDash || {};
     var dt = (now - this._lastTime) / 1000;
     this._lastTime = now;
 
-    /* Guard against tab-switch spikes and negative deltas. */
     if (!isFinite(dt) || dt < 0) dt = 0;
     dt = Math.min(dt, 1 / 30);
 
@@ -943,14 +1057,12 @@ window.EcoDash = window.EcoDash || {};
     this.draw();
   };
 
-  /* Expose. */
   EcoDash.Game = Game;
   EcoDash.REASON_TEXT = REASON_TEXT;
 })(window.EcoDash);
 
 /* ==========================================================================
-   BOOTSTRAP — wires the canvas, DOM overlay menus, the audio mixer panel
-   and the Game instance.
+   BOOTSTRAP — canvas, DOM overlay, audio mixer, touch controls
    ========================================================================== */
 (function () {
   'use strict';
@@ -964,12 +1076,9 @@ window.EcoDash = window.EcoDash || {};
       return;
     }
 
-    /* Input must be attached before Game starts polling it. */
     E.Input.attach(canvas);
 
     var game = new E.Game(canvas);
-
-    /* Expose for the live code-defence session / debugging. */
     window.ecodash = game;
 
     /* ------------------------------------------------------ DOM handles */
@@ -979,15 +1088,16 @@ window.EcoDash = window.EcoDash || {};
       over:   document.getElementById('screen-over')
     };
 
-    var overReason   = document.getElementById('over-reason');
-    var overStats    = document.getElementById('over-stats');
-    var muteIcon     = document.getElementById('mute-icon');
-    var btnMute      = document.getElementById('btn-mute');
+    var overReason = document.getElementById('over-reason');
+    var overStats  = document.getElementById('over-stats');
+    var muteIcon   = document.getElementById('mute-icon');
+    var btnMute    = document.getElementById('btn-mute');
+    var touchControls = document.getElementById('touch-controls');
 
-    var settingsPanel   = document.getElementById('settings-panel');
-    var btnSettings     = document.getElementById('btn-settings');
+    var settingsPanel    = document.getElementById('settings-panel');
+    var btnSettings      = document.getElementById('btn-settings');
     var btnCloseSettings = document.getElementById('btn-close-settings');
-    var mixerNote       = document.getElementById('mixer-note');
+    var mixerNote        = document.getElementById('mixer-note');
 
     /* -------------------------------------------------- state -> overlay */
     game.onStateChange = function (state) {
@@ -997,12 +1107,61 @@ window.EcoDash = window.EcoDash || {};
       }
       document.body.dataset.state = state;
 
+      /* Never leave a touch pad stuck down across a state change. */
+      if (state !== 'playing') {
+        if (E.Input.releaseTouch) E.Input.releaseTouch();
+        if (touchControls) {
+          var pressed = touchControls.querySelectorAll('.pressed');
+          for (var i = 0; i < pressed.length; i++) pressed[i].classList.remove('pressed');
+        }
+      }
+
       if (state === 'over') {
         var reasonText = E.REASON_TEXT[game.gameOverReason] || 'Mission terminated.';
         if (overReason) overReason.textContent = reasonText;
         if (overStats)  E.HUD.renderGameOver(game, overStats);
       }
     };
+
+    /* ==================================================================
+       ON-SCREEN FLIGHT PADS
+       ================================================================== */
+
+    function bindHold(el, onDown, onUp) {
+      if (!el) return;
+      var active = false;
+
+      function down(e) {
+        if (active) return;
+        active = true;
+        e.preventDefault();
+        el.classList.add('pressed');
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        E.Audio.unlock();
+        onDown();
+      }
+
+      function up() {
+        if (!active) return;
+        active = false;
+        el.classList.remove('pressed');
+        onUp();
+      }
+
+      el.addEventListener('pointerdown', down);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+      el.addEventListener('lostpointercapture', up);
+      el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    }
+
+    bindHold(document.getElementById('btn-thrust'),
+      function () { E.Input.setTouchThrust(true); },
+      function () { E.Input.setTouchThrust(false); });
+
+    bindHold(document.getElementById('btn-dive'),
+      function () { E.Input.setTouchDive(true); },
+      function () { E.Input.setTouchDive(false); });
 
     /* ==================================================================
        AUDIO MIXER PANEL
@@ -1029,7 +1188,6 @@ window.EcoDash = window.EcoDash || {};
       }
     };
 
-    /* Repaint the coloured "fill" portion of a range input. */
     function paintSlider(el) {
       if (!el) return;
       var min = parseFloat(el.min);
@@ -1066,7 +1224,6 @@ window.EcoDash = window.EcoDash || {};
 
       m.el.addEventListener('input', function () {
         var v = (parseFloat(m.el.value) || 0) / 100;
-        /* Live preview without hammering localStorage on every pixel. */
         m.set(v, false);
         if (m.out) m.out.textContent = Math.round(v * 100) + '%';
         paintSlider(m.el);
@@ -1074,10 +1231,10 @@ window.EcoDash = window.EcoDash || {};
 
       m.el.addEventListener('change', function () {
         var v = (parseFloat(m.el.value) || 0) / 100;
-        m.set(v, true);            /* persist the final value */
+        m.set(v, true);
         E.Audio.unlock();
         if (key === 'sfx') E.Audio.play('blip');
-        m.el.blur();               /* hand the keyboard back to the game */
+        m.el.blur();
       });
     }
 
@@ -1085,7 +1242,6 @@ window.EcoDash = window.EcoDash || {};
     bindSlider('music');
     bindSlider('sfx');
 
-    /* ------------------------------------------------- open / close --- */
     var autoPaused = false;
 
     function settingsOpen() {
@@ -1138,7 +1294,6 @@ window.EcoDash = window.EcoDash || {};
       });
     }
 
-    /* Escape closes the mixer and must NOT leak through to the game. */
     document.addEventListener('keydown', function (e) {
       if (!settingsOpen()) return;
       if (e.key === 'Escape') {
@@ -1163,7 +1318,7 @@ window.EcoDash = window.EcoDash || {};
       var el = document.getElementById(id);
       if (!el) return;
       el.addEventListener('click', function (evt) {
-        evt.currentTarget.blur();     // stop Space from re-triggering the click
+        evt.currentTarget.blur();
         E.Audio.unlock();
         handler();
       });
@@ -1173,6 +1328,7 @@ window.EcoDash = window.EcoDash || {};
     bind('btn-resume',        function () { game.resume(); });
     bind('btn-restart',       function () { game.startMission(); });
     bind('btn-restart-pause', function () { game.startMission(); });
+    bind('btn-pause',         function () { game.togglePause(); });
 
     if (btnMute) {
       btnMute.addEventListener('click', function (evt) {
@@ -1186,12 +1342,18 @@ window.EcoDash = window.EcoDash || {};
     var resizeTimer = null;
     function onResize() {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(function () { game.resize(); }, 80);
+      resizeTimer = setTimeout(function () { game.resize(); }, 160);
     }
     window.addEventListener('resize', onResize);
-    window.addEventListener('orientationchange', onResize);
+    window.addEventListener('orientationchange', function () {
+      /* Let the browser settle the new viewport before measuring. */
+      setTimeout(function () { game.resize(); }, 260);
+    });
 
-    /* Auto-pause on tab blur. Music keeps playing throughout. */
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', onResize);
+    }
+
     document.addEventListener('visibilitychange', function () {
       if (document.hidden && game.state === 'playing') game.pause();
     });
